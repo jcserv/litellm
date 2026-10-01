@@ -1,13 +1,15 @@
+import json
 import os
 
-from typing import Any, Dict
+from typing import Any, Dict, Final
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import httpx
 
 import litellm
 from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
+from litellm.llms.elevenlabs.audio_transcription.transformation import ElevenLabsAudioTranscriptionConfig
 
 os.environ.setdefault("ELEVENLABS_API_KEY", "test-elevenlabs-key")
 
@@ -26,20 +28,17 @@ class TestElevenLabsAudioTranscription(BaseLLMAudioTranscriptionTest):
         Test that provider-specific parameters like diarize=True get passed through
         to the ElevenLabs request form data.
         """
-        # Mock successful response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = (
-            '{"text": "Four score and seven years ago", "language_code": "en"}'
+        mock_response: Final = httpx.Response(
+            200,
+            json={
+                "text": "Four score and seven years ago",
+                "language_code": "en",
+                "words": [
+                    {"type": "word", "text": "Four", "start": 0.0, "end": 0.5},
+                    {"type": "word", "text": "score", "start": 0.5, "end": 1.0},
+                ],
+            },
         )
-        mock_response.json.return_value = {
-            "text": "Four score and seven years ago",
-            "language_code": "en",
-            "words": [
-                {"type": "word", "text": "Four", "start": 0.0, "end": 0.5},
-                {"type": "word", "text": "score", "start": 0.5, "end": 1.0},
-            ],
-        }
 
         # Create a mock audio file
         audio_content = b"fake audio data"
@@ -84,39 +83,29 @@ class TestElevenLabsAudioTranscription(BaseLLMAudioTranscriptionTest):
 
                 # Check basic required parameters
                 assert "model_id" in form_data, "model_id should be in form data"
-                assert (
-                    form_data["model_id"] == "scribe_v1"
-                ), f"Expected model_id 'scribe_v1', got {form_data['model_id']}"
+                assert form_data["model_id"] == "scribe_v1", (
+                    f"Expected model_id 'scribe_v1', got {form_data['model_id']}"
+                )
 
                 # Check that diarize parameter is passed through
-                assert (
-                    "diarize" in form_data
-                ), f"diarize should be in form data. Got: {list(form_data.keys())}"
-                assert (
-                    form_data["diarize"] == "True"
-                ), f"Expected diarize='True', got {form_data['diarize']}"
+                assert "diarize" in form_data, f"diarize should be in form data. Got: {list(form_data.keys())}"
+                assert form_data["diarize"] == "True", f"Expected diarize='True', got {form_data['diarize']}"
 
                 # Check that OpenAI language parameter is mapped correctly
-                assert (
-                    "language_code" in form_data
-                ), "language_code should be in form data"
-                assert (
-                    form_data["language_code"] == "en"
-                ), f"Expected language_code='en', got {form_data['language_code']}"
+                assert "language_code" in form_data, "language_code should be in form data"
+                assert form_data["language_code"] == "en", (
+                    f"Expected language_code='en', got {form_data['language_code']}"
+                )
 
                 # Check that temperature is passed through
                 assert "temperature" in form_data, "temperature should be in form data"
-                assert (
-                    form_data["temperature"] == "0.5"
-                ), f"Expected temperature='0.5', got {form_data['temperature']}"
+                assert form_data["temperature"] == "0.5", f"Expected temperature='0.5', got {form_data['temperature']}"
 
                 # Check that custom parameters are passed through
-                assert (
-                    "custom_param" in form_data
-                ), "custom_param should be in form data"
-                assert (
-                    form_data["custom_param"] == "test_value"
-                ), f"Expected custom_param='test_value', got {form_data['custom_param']}"
+                assert "custom_param" in form_data, "custom_param should be in form data"
+                assert form_data["custom_param"] == "test_value", (
+                    f"Expected custom_param='test_value', got {form_data['custom_param']}"
+                )
 
                 # Check that files are included
                 files = captured_request_data["files"]
@@ -155,10 +144,7 @@ class TestElevenLabsTextToSpeechTransformation:
 
         assert mapped_voice == config.VOICE_MAPPINGS["alloy"]
         assert mapped_params["voice_settings"]["speed"] == pytest.approx(1.25)
-        assert (
-            kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY]["output_format"]
-            == "mp3_44100_128"
-        )
+        assert kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY]["output_format"] == "mp3_44100_128"
 
     def test_transform_request_and_url(self, config):
         kwargs: Dict[str, Any] = {}
@@ -167,9 +153,7 @@ class TestElevenLabsTextToSpeechTransformation:
             optional_params={
                 "response_format": "pcm",
                 "model_id": "eleven_multilingual_v2",
-                "pronunciation_dictionary_locators": [
-                    {"pronunciation_dictionary_id": "dict_1"}
-                ],
+                "pronunciation_dictionary_locators": [{"pronunciation_dictionary_id": "dict_1"}],
             },
             voice="alloy",
             kwargs=kwargs,
@@ -177,14 +161,10 @@ class TestElevenLabsTextToSpeechTransformation:
 
         litellm_params: Dict[str, Any] = {
             config.ELEVENLABS_VOICE_ID_KEY: voice_id,
-            config.ELEVENLABS_QUERY_PARAMS_KEY: kwargs[
-                config.ELEVENLABS_QUERY_PARAMS_KEY
-            ],
+            config.ELEVENLABS_QUERY_PARAMS_KEY: kwargs[config.ELEVENLABS_QUERY_PARAMS_KEY],
         }
 
-        headers = config.validate_environment(
-            headers={}, model="eleven_multilingual_v2", api_key="test-key"
-        )
+        headers = config.validate_environment(headers={}, model="eleven_multilingual_v2", api_key="test-key")
 
         request_data = config.transform_text_to_speech_request(
             model="eleven_multilingual_v2",
@@ -209,3 +189,28 @@ class TestElevenLabsTextToSpeechTransformation:
 
         assert voice_id in url
         assert "output_format=pcm_44100" in url
+
+
+def test_native_diarization_and_segments_survive_proxy_serialization() -> None:
+    payload: Final = {
+        "language_code": "en",
+        "language_probability": 0.97,
+        "text": "Hello there.",
+        "words": [
+            {"text": "Hello", "type": "word", "start": 0, "end": 0.4, "speaker_id": "speaker_0", "logprob": -0.1},
+            {"text": " ", "type": "spacing", "start": 0.4, "end": 0.4},
+            {"text": "there.", "type": "word", "start": 0.5, "end": 1, "speaker_id": "speaker_1"},
+        ],
+        "additional_formats": [{"requested_format": "segmented_json", "content": '{"segments":[]}'}],
+    }
+    config: Final = ElevenLabsAudioTranscriptionConfig()
+    response: Final = config.transform_audio_transcription_response(httpx.Response(200, json=payload))
+    response._hidden_params["api_key"] = "private-provider-key"
+    serialized: Final = json.loads(response.model_dump_json())
+
+    assert serialized["text"] == payload["text"]
+    assert serialized["words"] == [
+        {"word": "Hello", "start": 0, "end": 0.4},
+        {"word": "there.", "start": 0.5, "end": 1},
+    ]
+    assert serialized["provider_specific_fields"]["elevenlabs"] == payload
