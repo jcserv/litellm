@@ -40,6 +40,7 @@ from pydantic import (
     JsonValue,
     PrivateAttr,
     SkipValidation,
+    TypeAdapter,
     field_serializer,
     field_validator,
 )
@@ -2763,6 +2764,14 @@ class TranscriptionResponse(OpenAIObject):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class ProviderSpecificTranscriptionResponse(TranscriptionResponse):
+    provider_specific_fields: Mapping[str, JsonValue] = Field(default_factory=dict)
+
+    def __init__(self, text: str | None, *, provider_specific_fields: Mapping[str, JsonValue]) -> None:
+        super().__init__(text=text)
+        self.provider_specific_fields = TypeAdapter(Mapping[str, JsonValue]).validate_python(provider_specific_fields)
 
 
 class GenericImageParsingChunk(TypedDict):

@@ -2,9 +2,11 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
+from types import MappingProxyType
 from typing import Final
 
 from httpx import Headers, Response
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -14,7 +16,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.types.utils import FileTypes, TranscriptionResponse
+from litellm.types.utils import FileTypes, ProviderSpecificTranscriptionResponse, TranscriptionResponse
 
 from ...base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -115,12 +117,16 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         try:
             response_json: Final = raw_response.json()
+            native_response: Final = TypeAdapter(dict[str, JsonValue]).validate_json(raw_response.content)
 
             # Extract the main transcript text
-            text: Final = response_json.get("text", "")
+            text: Final = TypeAdapter[str | None](str | None).validate_python(native_response.get("text", ""))
 
             # Create TranscriptionResponse object
-            response: Final = TranscriptionResponse(text=text)
+            response: Final = ProviderSpecificTranscriptionResponse(
+                text=text,
+                provider_specific_fields=MappingProxyType({"elevenlabs": native_response}),
+            )
 
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
@@ -140,7 +146,6 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                             }
                         )
 
-            # Store full response in hidden params
             response._hidden_params = response_json
 
             return response
